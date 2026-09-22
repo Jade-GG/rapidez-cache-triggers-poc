@@ -1,0 +1,12 @@
+name: Check translations
+
+on:
+  push:
+    branches:
+      - master
+      - '*.x'
+  pull_request:
+
+jobs:
+  translations:
+    uses: rapidez/workflows/.github/workflows/translations.yml@master

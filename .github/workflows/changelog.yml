@@ -1,0 +1,15 @@
+name: "Update Changelog"
+
+on:
+  workflow_dispatch:
+  release:
+    types: [ published, edited, deleted ]
+
+jobs:
+  generate:
+    uses: rapidez/workflows/.github/workflows/changelog.yml@master
+    with:
+      repository: ${{ github.repository }}
+      branch: ${{ github.event.release.target_commitish }}
+      ref: ${{ github.head_ref || github.ref_name }}
+    secrets: inherit

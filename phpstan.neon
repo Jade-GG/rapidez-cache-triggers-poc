@@ -1,0 +1,7 @@
+includes:
+    - ./vendor/rapidez/coding-standards/phpstan.neon
+
+parameters:
+    level: 1
+    paths:
+        - src/

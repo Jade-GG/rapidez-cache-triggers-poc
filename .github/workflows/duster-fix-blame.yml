@@ -1,0 +1,14 @@
+name: Duster
+
+# Commits made in here will not trigger any workflows
+# Checkout Duster's documentation for a workaround
+
+on:
+  push:
+
+jobs:
+  duster:
+    uses: rapidez/workflows/.github/workflows/duster-fix-blame.yml@master
+    with:
+      ref: ${{ github.head_ref }}
+    secrets: inherit

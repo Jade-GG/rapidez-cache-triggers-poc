@@ -1,0 +1,25 @@
+name: analyse
+
+on: ["push", "pull_request"]
+
+jobs:
+  test:
+    uses: rapidez/workflows/.github/workflows/analyse.yml@master
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest]
+        php: [8.4, 8.5]
+        laravel: [12.*, 13.*]
+        stability: [prefer-stable, prefer-lowest]
+        include:
+          - laravel: 12.*
+            testbench: 10.*
+          - laravel: 13.*
+            testbench: 11.*
+    with:
+      os: ${{ matrix.os }}
+      php: ${{ matrix.php }}
+      laravel: ${{ matrix.laravel }}
+      testbench: ${{ matrix.testbench }}
+      stability: ${{ matrix.stability }}
