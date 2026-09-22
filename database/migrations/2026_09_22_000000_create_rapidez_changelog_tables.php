@@ -55,6 +55,7 @@ return new class extends Migration
             $table->string('trigger');
             $table->timestamp('created_at')->useCurrent();
             $table->index('entity_id');
+            $table->index('created_at');
         });
 
         Schema::create('rapidez_category_changelog', function (Blueprint $table) {
@@ -63,6 +64,7 @@ return new class extends Migration
             $table->string('trigger');
             $table->timestamp('created_at')->useCurrent();
             $table->index('entity_id');
+            $table->index('created_at');
         });
     }
 
