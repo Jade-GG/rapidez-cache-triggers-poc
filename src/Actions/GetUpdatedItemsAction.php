@@ -47,7 +47,7 @@ class GetUpdatedItemsAction
     protected function getModelSince(string $model, Carbon $since): Collection
     {
         return $model::query()
-            ->where('version_id', '>', $since)
+            ->where('created_at', '>', $since)
             ->when(
                 count($this->triggers),
                 fn (Builder $query) => $query->whereIn('trigger', $this->triggers),
