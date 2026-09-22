@@ -12,24 +12,38 @@ class GetUpdatedItemsAction
 {
     protected array $triggers = [];
     protected array $exceptTriggers = [];
+    protected ?int $storeId = null;
+
     /**
      *  @param array<string> $triggers
      */
-    public function onlyOn(array $triggers): GetUpdatedItemsAction
+    public function onlyOn(array $triggers): static
     {
-        $this->triggers = $triggers;
+        $clone = clone $this;
+        $clone->triggers = $triggers;
 
-        return $this;
+        return $clone;
     }
+
     /**
      *  @param array<string> $triggers
      */
-    public function exceptOn(array $triggers): GetUpdatedItemsAction
+    public function exceptOn(array $triggers): static
     {
-        $this->exceptTriggers = $triggers;
+        $clone = clone $this;
+        $clone->exceptTriggers = $triggers;
 
-        return $this;
+        return $clone;
     }
+
+    public function store(int $storeId): static
+    {
+        $clone = clone $this;
+        $clone->storeId = $storeId;
+
+        return $clone;
+    }
+
     /**
      *  @return array<string,Collection<int, int>>
      */
@@ -52,6 +66,10 @@ class GetUpdatedItemsAction
                 count($this->triggers),
                 fn (Builder $query) => $query->whereIn('trigger', $this->triggers),
                 fn (Builder $query) => $query->whereNotIn('trigger', $this->exceptTriggers),
+            )
+            ->when(
+                ! is_null($this->storeId),
+                fn (Builder $query) => $query->whereIn('store_id', [0, $this->storeId]),
             )
             ->pluck('entity_id')
             ->unique()
