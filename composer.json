@@ -1,16 +1,16 @@
 {
-    "name": ":vendor_slug/:package_slug",
-    "description": ":package_description",
+    "name": "rapidez/rapidez-cache-triggers-poc",
+    "description": "This is my package rapidez-cache-triggers-poc",
     "keywords": [
         "rapidez",
-        ":package_slug"
+        "rapidez-cache-triggers-poc"
     ],
-    "homepage": "https://github.com/:vendor_slug/:package_slug",
+    "homepage": "https://github.com/rapidez/rapidez-cache-triggers-poc",
     "license": "GPL-3.0-or-later",
     "authors": [
         {
-            "name": ":author_name",
-            "email": "author@domain.com",
+            "name": "Jade",
+            "email": "jade@justbetter.nl",
             "role": "Developer"
         }
     ],
@@ -22,7 +22,7 @@
     },
     "autoload": {
         "psr-4": {
-            "VendorName\\Skeleton\\": "src"
+            "Rapidez\\RapidezCacheTriggersPoc\\": "src"
         }
     },
     "config": {
@@ -34,7 +34,7 @@
     "extra": {
         "laravel": {
             "providers": [
-                "VendorName\\Skeleton\\SkeletonServiceProvider"
+                "Rapidez\\RapidezCacheTriggersPoc\\RapidezCacheTriggersPocServiceProvider"
             ]
         }
     },
