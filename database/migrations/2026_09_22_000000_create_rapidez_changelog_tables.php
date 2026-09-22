@@ -50,7 +50,7 @@ return new class extends Migration
             $table->unsignedInteger('entity_id');
             $table->unsignedSmallInteger('store_id')->default(0);
             $table->string('trigger');
-            $table->timestamp('created_at')->useCurrent();
+            $table->dateTime('created_at')->useCurrent();
             $table->index('entity_id');
             $table->index('store_id');
             $table->index('created_at');
@@ -61,7 +61,7 @@ return new class extends Migration
             $table->unsignedInteger('entity_id');
             $table->unsignedSmallInteger('store_id')->default(0);
             $table->string('trigger');
-            $table->timestamp('created_at')->useCurrent();
+            $table->dateTime('created_at')->useCurrent();
             $table->index('entity_id');
             $table->index('store_id');
             $table->index('created_at');
