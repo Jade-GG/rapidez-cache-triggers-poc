@@ -12,7 +12,7 @@ composer require rapidez/rapidez-cache-triggers-poc
 
 ### Magento indexers
 
-This package reads the changelog (`*_cl`) tables of the following Magento indexers. These tables only exist when the indexer is set to "Update by Schedule", indexers that aren't are skipped (and their changes won't be detected).
+Products and categories with a changed `updated_at` are always returned. Magento updates this on every save, and the Akeneo connector on every import, but not for changes that bypass the product or category itself (mass attribute updates, the price APIs, stock, category assignments, ...). For those, this package reads the changelog (`*_cl`) tables of the following Magento indexers. These tables only exist when the indexer is set to "Update by Schedule", indexers that aren't are skipped (and their changes won't be detected).
 
 Magento fills these changelogs with database triggers on the tables each indexer subscribes to (see the `mview.xml` files), so they contain the ids of every product or category with a changed row in those tables, also for direct database writes like the Akeneo connector's. We don't use the indexers themselves, only their changelogs.
 
@@ -22,11 +22,9 @@ Magento fills these changelogs with database triggers on the tables each indexer
 | `catalog_product_price` | Product Price | Prices, tier prices, catalog rule prices, `datetime` attribute values, websites |
 | `cataloginventory_stock` | Stock | Stock items |
 | `catalog_product_category` | Product Categories | Category assignments, status/visibility and websites (product and its categories) |
-| `catalog_category_product` | Category Products | Categories themselves |
-| `catalogsearch_fulltext` | Catalog Search | `text` attribute values and configurable/bundle children, no other indexer subscribes to those |
 
 ```
-bin/magento indexer:set-mode schedule catalog_product_attribute catalog_product_price cataloginventory_stock catalog_product_category catalog_category_product catalogsearch_fulltext
+bin/magento indexer:set-mode schedule catalog_product_attribute catalog_product_price cataloginventory_stock catalog_product_category
 ```
 
 Impact of "Update by Schedule" on Magento:
@@ -41,7 +39,7 @@ You can publish the config with:
 php artisan vendor:publish --tag=rapidez-cache-triggers-poc-config
 ```
 
-`changelogs` contains the changelog models that are read. Each model extends `Rapidez\RapidezCacheTriggersPoc\Models\Changelog` and only defines its Magento view. The ids in these changelogs are product ids, except for `CategoryProductChangelog` (category ids). For `ProductCategoryChangelog` the categories of the changed products are returned as well.
+`changelogs` contains the changelog models that are read. Each model extends `Rapidez\RapidezCacheTriggersPoc\Models\Changelog` and only defines its Magento view. The ids in these changelogs are product ids. For `ProductCategoryChangelog` the categories of the changed products are returned as well.
 
 ## Usage
 
@@ -82,7 +80,9 @@ This is a proof of concept; these are known things to address before using it in
 - Categories that a product was removed from are not returned.
 - MSI's `inventory` changelog (source item ids) isn't used, stock changes only come through `cataloginventory_stock`.
 - Rapidez still reads the special price from `catalog_product_index_price` and `category_ids` from `catalog_category_product_index_store*`. Because changes are returned before Magento reindexes, a page can be cached again with the old special price or categories until the next change or full flush. Clearing these products again once Magento has processed the change (`mview_state.version_id`) would fix this.
-- Category `varchar`/`text` attribute changes (name, description, URL key, image, meta fields) aren't detected, because `catalog_category_product` only subscribes to `catalog_category_entity` and `catalog_category_entity_int` (and `updated_at` changes are ignored by Magento's triggers). The `catalog_category_flat` view subscribes to all category EAV tables, but Magento removes the flat indexers when the flat catalog is disabled, so it can't be used. These could be detected with a snapshot, like attribute options.
+- Product `text` attribute changes that don't update `updated_at` (e.g. the mass attribute update) aren't detected, no aptly named indexer subscribes to `catalog_product_entity_text` (only `catalogsearch_fulltext` and `catalogrule_product` do).
+- A child that's removed from a configurable or bundle by a direct database write, without updating the parent, doesn't return the parent anymore.
+- The Akeneo connector updates `updated_at` before it writes the new values. If this runs during an import, the product can be cleared before its new `text` values are written (other values are caught by the changelogs once they're written), and get cached with the old values.
 - Changes that are written, reindexed and cleaned up by Magento between two runs are lost and cause a flush. Running the changelog cleanup less often (or taking our position into account) would prevent this.
 
 ## License

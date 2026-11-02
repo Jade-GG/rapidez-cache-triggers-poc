@@ -9,7 +9,6 @@ use Illuminate\Support\Facades\Storage;
 use Rapidez\RapidezCacheTriggersPoc\Models\AttributeOption;
 use Rapidez\RapidezCacheTriggersPoc\Models\CategoryProductLink;
 use Rapidez\RapidezCacheTriggersPoc\Models\Changelog;
-use Rapidez\RapidezCacheTriggersPoc\Models\Changelogs\CategoryProductChangelog;
 use Rapidez\RapidezCacheTriggersPoc\Models\Changelogs\ProductCategoryChangelog;
 
 class GetUpdatedItemsAction
@@ -23,6 +22,7 @@ class GetUpdatedItemsAction
     {
         $previous = json_decode(Storage::disk('local')->get(static::STATE_PATH) ?? '', true);
         $state = [
+            'time' => DB::scalar('SELECT NOW()'),
             'versions' => $this->getVersions(),
             'attributes' => $this->getChecksum(['eav_attribute', 'catalog_eav_attribute', 'eav_attribute_label', 'eav_entity_attribute']),
             'options' => AttributeOption::getHashes(),
@@ -59,20 +59,20 @@ class GetUpdatedItemsAction
             }
 
             $ids = $changelog->getChangedIds($from, $to);
-
-            if ($changelog instanceof CategoryProductChangelog) {
-                $categories = $categories->merge($ids);
-            } else {
-                $products = $products->merge($ids);
-            }
+            $products = $products->merge($ids);
 
             if ($changelog instanceof ProductCategoryChangelog) {
                 $categories = $categories->merge($this->getCategories($ids));
             }
         }
 
-        $products = $products->merge(AttributeOption::getProducts(array_keys(array_diff_assoc($state['options'], $previous['options']))));
+        $products = $products
+            ->merge(config('rapidez.models.product')::withoutGlobalScopes()->where('updated_at', '>=', $previous['time'])->pluck('entity_id'))
+            ->merge(AttributeOption::getProducts(array_keys(array_diff_assoc($state['options'], $previous['options']))));
         $products = $products->merge($this->getParents($products));
+
+        $categories = $categories
+            ->merge(config('rapidez.models.category')::withoutGlobalScopes()->where('updated_at', '>=', $previous['time'])->pluck('entity_id'));
 
         return [
             'products' => $products->unique()->values(),
