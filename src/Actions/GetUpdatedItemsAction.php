@@ -5,6 +5,7 @@ namespace Rapidez\RapidezCacheTriggersPoc\Actions;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Rapidez\RapidezCacheTriggersPoc\Models\AttributeChangelog;
 use Rapidez\RapidezCacheTriggersPoc\Models\CategoryChangelog;
 use Rapidez\RapidezCacheTriggersPoc\Models\ProductChangelog;
 
@@ -52,6 +53,7 @@ class GetUpdatedItemsAction
         return [
             'products' => $this->getModelSince(ProductChangelog::class, $since),
             'categories' => $this->getModelSince(CategoryChangelog::class, $since),
+            'attributes' => $this->getModelSince(AttributeChangelog::class, $since),
         ];
     }
 

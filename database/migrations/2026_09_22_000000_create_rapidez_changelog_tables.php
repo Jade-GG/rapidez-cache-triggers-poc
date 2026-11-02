@@ -15,12 +15,11 @@ return new class extends Migration
         'catalog_product_entity_datetime',
     ];
 
-    protected array $categoryEavTables = [
-        'catalog_category_entity_int',
-        'catalog_category_entity_decimal',
-        'catalog_category_entity_varchar',
-        'catalog_category_entity_text',
-        'catalog_category_entity_datetime',
+    protected array $events = [
+        'ai' => 'AFTER INSERT',
+        'au' => 'AFTER UPDATE',
+        'ad' => 'AFTER DELETE',
+        'bd' => 'BEFORE DELETE',
     ];
 
     public function up(): void
@@ -29,271 +28,214 @@ return new class extends Migration
         $this->createProductTriggers();
         $this->createCategoryTriggers();
         $this->createJunctionTriggers();
-        $this->createStatusVisibilityFanInTrigger();
-        $this->createAttributeDefinitionTriggers();
+        $this->createAttributeTriggers();
     }
 
     public function down(): void
     {
-        foreach ($this->allTriggerNames() as $trigger) {
-            DB::unprepared("DROP TRIGGER IF EXISTS rapidez_{$trigger}");
-        }
+        DB::table('information_schema.TRIGGERS')
+            ->whereRaw('TRIGGER_SCHEMA = DATABASE()')
+            ->where('TRIGGER_NAME', 'like', 'rapidez\_changelog\_%')
+            ->pluck('TRIGGER_NAME')
+            ->each(fn (string $trigger) => DB::unprepared("DROP TRIGGER IF EXISTS `{$trigger}`"));
 
         Schema::dropIfExists('rapidez_product_changelog');
         Schema::dropIfExists('rapidez_category_changelog');
+        Schema::dropIfExists('rapidez_attribute_changelog');
     }
 
     protected function createChangelogTables(): void
     {
-        Schema::create('rapidez_product_changelog', function (Blueprint $table) {
-            $table->id('version_id');
-            $table->unsignedInteger('entity_id');
-            $table->unsignedSmallInteger('store_id')->default(0);
-            $table->string('trigger');
-            $table->dateTime('created_at')->useCurrent();
-            $table->index('entity_id');
-            $table->index('store_id');
-            $table->index('created_at');
-        });
-
-        Schema::create('rapidez_category_changelog', function (Blueprint $table) {
-            $table->id('version_id');
-            $table->unsignedInteger('entity_id');
-            $table->unsignedSmallInteger('store_id')->default(0);
-            $table->string('trigger');
-            $table->dateTime('created_at')->useCurrent();
-            $table->index('entity_id');
-            $table->index('store_id');
-            $table->index('created_at');
-        });
+        foreach (['product', 'category', 'attribute'] as $type) {
+            Schema::create("rapidez_{$type}_changelog", function (Blueprint $table) use ($type) {
+                $table->id('version_id');
+                $table->unsignedInteger('entity_id');
+                $table->unsignedSmallInteger('store_id')->default(0);
+                if ($type === 'attribute') {
+                    $table->unsignedSmallInteger('attribute_set_id')->nullable();
+                }
+                $table->string('trigger');
+                $table->dateTime('created_at')->useCurrent();
+                $table->index('entity_id');
+                $table->index('store_id');
+                $table->index('created_at');
+            });
+        }
     }
 
     protected function createProductTriggers(): void
     {
-        DB::unprepared('
-            CREATE TRIGGER rapidez_catalog_product_entity_ai AFTER INSERT ON catalog_product_entity
-            FOR EACH ROW INSERT INTO rapidez_product_changelog (entity_id, store_id, `trigger`) VALUES (NEW.entity_id, 0, \'catalog_product_entity_ai\')
-        ');
+        $this->createTrigger('catalog_product_entity', 'ai', $this->log('product', ['entity_id' => 'NEW.entity_id']));
+        $this->createTrigger('catalog_product_entity', 'au', $this->log('product', ['entity_id' => 'NEW.entity_id']));
+        $this->createTrigger('catalog_product_entity', 'bd', implode("\n", [
+            $this->log('product', ['entity_id' => 'OLD.entity_id']),
+            $this->log('product', ['entity_id' => 'parent_id'], 'catalog_product_relation WHERE child_id = OLD.entity_id'),
+            $this->log('category', ['entity_id' => 'category_id'], 'catalog_category_product WHERE product_id = OLD.entity_id'),
+        ]));
 
-        DB::unprepared('
-            CREATE TRIGGER rapidez_catalog_product_entity_au AFTER UPDATE ON catalog_product_entity
-            FOR EACH ROW INSERT INTO rapidez_product_changelog (entity_id, store_id, `trigger`) VALUES (NEW.entity_id, 0, \'catalog_product_entity_au\')
-        ');
-
-        DB::unprepared('
-            CREATE TRIGGER rapidez_catalog_product_entity_ad AFTER DELETE ON catalog_product_entity
-            FOR EACH ROW INSERT INTO rapidez_product_changelog (entity_id, store_id, `trigger`) VALUES (OLD.entity_id, 0, \'catalog_product_entity_ad\')
-        ');
+        $statusVisibility = $this->statusVisibilityAttributeIds();
 
         foreach ($this->productEavTables as $table) {
-            DB::unprepared("
-                CREATE TRIGGER rapidez_{$table}_ai AFTER INSERT ON {$table}
-                FOR EACH ROW INSERT INTO rapidez_product_changelog (entity_id, store_id, `trigger`) VALUES (NEW.entity_id, NEW.store_id, '{$table}_ai')
-            ");
+            foreach (['ai' => 'NEW', 'au' => 'NEW', 'ad' => 'OLD'] as $event => $row) {
+                $body = $this->log('product', ['entity_id' => "{$row}.entity_id", 'store_id' => "{$row}.store_id"]);
 
-            DB::unprepared("
-                CREATE TRIGGER rapidez_{$table}_au AFTER UPDATE ON {$table}
-                FOR EACH ROW INSERT INTO rapidez_product_changelog (entity_id, store_id, `trigger`) VALUES (NEW.entity_id, NEW.store_id, '{$table}_au')
-            ");
+                if ($table === 'catalog_product_entity_int' && $statusVisibility) {
+                    $body .= "\nIF {$row}.attribute_id IN ({$statusVisibility}) THEN "
+                        . $this->log('category', ['entity_id' => 'category_id', 'store_id' => "{$row}.store_id"], "catalog_category_product WHERE product_id = {$row}.entity_id")
+                        . ' END IF;';
+                }
+
+                if ($event === 'au') {
+                    $body = $this->onlyIfChanged(['value'], $body);
+                }
+
+                $this->createTrigger($table, $event, $body);
+            }
         }
 
-        DB::unprepared('
-            CREATE TRIGGER rapidez_catalog_product_website_ai AFTER INSERT ON catalog_product_website
-            FOR EACH ROW INSERT INTO rapidez_product_changelog (entity_id, store_id, `trigger`) VALUES (NEW.product_id, 0, \'catalog_product_website_ai\')
-        ');
+        foreach (['ai' => 'NEW', 'au' => 'NEW', 'ad' => 'OLD'] as $event => $row) {
+            $body = $this->log('product', ['entity_id' => "{$row}.entity_id"]);
 
-        DB::unprepared('
-            CREATE TRIGGER rapidez_catalog_product_website_ad AFTER DELETE ON catalog_product_website
-            FOR EACH ROW INSERT INTO rapidez_product_changelog (entity_id, store_id, `trigger`) VALUES (OLD.product_id, 0, \'catalog_product_website_ad\')
-        ');
+            if ($event === 'au') {
+                $body = $this->onlyIfChanged($this->columnsExcept('catalog_product_entity_tier_price', ['value_id']), $body);
+            }
 
-        DB::unprepared('
-            CREATE TRIGGER rapidez_cataloginventory_stock_item_au AFTER UPDATE ON cataloginventory_stock_item
-            FOR EACH ROW INSERT INTO rapidez_product_changelog (entity_id, store_id, `trigger`) VALUES (NEW.product_id, 0, \'cataloginventory_stock_item_au\')
-        ');
+            $this->createTrigger('catalog_product_entity_tier_price', $event, $body);
+        }
 
-        DB::unprepared('
-            CREATE TRIGGER rapidez_catalog_product_super_link_ai AFTER INSERT ON catalog_product_super_link
-            FOR EACH ROW INSERT INTO rapidez_product_changelog (entity_id, store_id, `trigger`) VALUES (NEW.parent_id, 0, \'catalog_product_super_link_ai\')
-        ');
+        foreach (['ai' => 'NEW', 'ad' => 'OLD'] as $event => $row) {
+            $this->createTrigger('catalog_product_website', $event, implode("\n", [
+                $this->log('product', ['entity_id' => "{$row}.product_id"]),
+                $this->log('category', ['entity_id' => 'category_id'], "catalog_category_product WHERE product_id = {$row}.product_id"),
+            ]));
 
-        DB::unprepared('
-            CREATE TRIGGER rapidez_catalog_product_super_link_ad AFTER DELETE ON catalog_product_super_link
-            FOR EACH ROW INSERT INTO rapidez_product_changelog (entity_id, store_id, `trigger`) VALUES (OLD.parent_id, 0, \'catalog_product_super_link_ad\')
-        ');
+            $this->createTrigger('catalog_product_relation', $event, $this->log('product', ['entity_id' => "{$row}.parent_id"]));
+            $this->createTrigger('catalog_product_super_link', $event, $this->log('product', ['entity_id' => "{$row}.parent_id"]));
+        }
+
+        $this->createTrigger('cataloginventory_stock_item', 'ai', $this->log('product', ['entity_id' => 'NEW.product_id']));
+        $this->createTrigger('cataloginventory_stock_item', 'au', implode("\n", [
+            $this->onlyIfChanged(
+                $this->columnsExcept('cataloginventory_stock_item', ['item_id', 'low_stock_date']),
+                $this->log('product', ['entity_id' => 'NEW.product_id']),
+            ),
+            $this->onlyIfChanged(
+                ['is_in_stock'],
+                $this->log('category', ['entity_id' => 'category_id'], 'catalog_category_product WHERE product_id = NEW.product_id'),
+            ),
+        ]));
     }
 
     protected function createCategoryTriggers(): void
     {
-        DB::unprepared('
-            CREATE TRIGGER rapidez_catalog_category_entity_ai AFTER INSERT ON catalog_category_entity
-            FOR EACH ROW INSERT INTO rapidez_category_changelog (entity_id, store_id, `trigger`) VALUES (NEW.entity_id, 0, \'catalog_category_entity_ai\')
-        ');
-
-        DB::unprepared('
-            CREATE TRIGGER rapidez_catalog_category_entity_au AFTER UPDATE ON catalog_category_entity
-            FOR EACH ROW INSERT INTO rapidez_category_changelog (entity_id, store_id, `trigger`) VALUES (NEW.entity_id, 0, \'catalog_category_entity_au\')
-        ');
-
-        DB::unprepared('
-            CREATE TRIGGER rapidez_catalog_category_entity_ad AFTER DELETE ON catalog_category_entity
-            FOR EACH ROW INSERT INTO rapidez_category_changelog (entity_id, store_id, `trigger`) VALUES (OLD.entity_id, 0, \'catalog_category_entity_ad\')
-        ');
-
-        foreach ($this->categoryEavTables as $table) {
-            DB::unprepared("
-                CREATE TRIGGER rapidez_{$table}_ai AFTER INSERT ON {$table}
-                FOR EACH ROW INSERT INTO rapidez_category_changelog (entity_id, store_id, `trigger`) VALUES (NEW.entity_id, NEW.store_id, '{$table}_ai')
-            ");
-
-            DB::unprepared("
-                CREATE TRIGGER rapidez_{$table}_au AFTER UPDATE ON {$table}
-                FOR EACH ROW INSERT INTO rapidez_category_changelog (entity_id, store_id, `trigger`) VALUES (NEW.entity_id, NEW.store_id, '{$table}_au')
-            ");
-        }
+        $this->createTrigger('catalog_category_entity', 'ai', $this->log('category', ['entity_id' => 'NEW.entity_id']));
+        $this->createTrigger('catalog_category_entity', 'au', $this->log('category', ['entity_id' => 'NEW.entity_id']));
+        $this->createTrigger('catalog_category_entity', 'bd', implode("\n", [
+            $this->log('category', ['entity_id' => 'OLD.entity_id']),
+            $this->log('product', ['entity_id' => 'product_id'], 'catalog_category_product WHERE category_id = OLD.entity_id'),
+        ]));
     }
 
     protected function createJunctionTriggers(): void
     {
-        DB::unprepared('
-            CREATE TRIGGER rapidez_catalog_category_product_ai AFTER INSERT ON catalog_category_product
-            FOR EACH ROW BEGIN
-                INSERT INTO rapidez_category_changelog (entity_id, store_id, `trigger`) VALUES (NEW.category_id, 0, \'catalog_category_product_ai\');
-                INSERT INTO rapidez_product_changelog (entity_id, store_id, `trigger`) VALUES (NEW.product_id, 0, \'catalog_category_product_ai\');
-            END
-        ');
-
-        DB::unprepared('
-            CREATE TRIGGER rapidez_catalog_category_product_ad AFTER DELETE ON catalog_category_product
-            FOR EACH ROW BEGIN
-                INSERT INTO rapidez_category_changelog (entity_id, store_id, `trigger`) VALUES (OLD.category_id, 0, \'catalog_category_product_ad\');
-                INSERT INTO rapidez_product_changelog (entity_id, store_id, `trigger`) VALUES (OLD.product_id, 0, \'catalog_category_product_ad\');
-            END
-        ');
-    }
-
-    protected function createStatusVisibilityFanInTrigger(): void
-    {
-        $productEntityTypeId = DB::table('eav_entity_type')
-            ->where('entity_type_code', 'catalog_product')
-            ->value('entity_type_id');
-
-        $statusAttributeId = (int) DB::table('eav_attribute')
-            ->where('entity_type_id', $productEntityTypeId)
-            ->where('attribute_code', 'status')
-            ->value('attribute_id');
-
-        $visibilityAttributeId = (int) DB::table('eav_attribute')
-            ->where('entity_type_id', $productEntityTypeId)
-            ->where('attribute_code', 'visibility')
-            ->value('attribute_id');
-
-        if (! $statusAttributeId || ! $visibilityAttributeId) {
-            return;
+        foreach (['ai' => 'NEW', 'ad' => 'OLD'] as $event => $row) {
+            $this->createTrigger('catalog_category_product', $event, implode("\n", [
+                $this->log('category', ['entity_id' => "{$row}.category_id"]),
+                $this->log('product', ['entity_id' => "{$row}.product_id"]),
+            ]));
         }
 
+        $this->createTrigger('catalog_category_product', 'au', $this->onlyIfChanged(
+            ['position'],
+            $this->log('category', ['entity_id' => 'NEW.category_id']),
+        ));
+    }
+
+    protected function createAttributeTriggers(): void
+    {
+        $this->createTrigger('eav_attribute', 'au', $this->onlyIfChanged(
+            $this->columnsExcept('eav_attribute', ['attribute_id']),
+            $this->log('attribute', ['entity_id' => 'NEW.attribute_id']),
+        ));
+        $this->createTrigger('eav_attribute', 'bd', implode("\n", [
+            $this->log('attribute', ['entity_id' => 'OLD.attribute_id']),
+            $this->log('attribute', ['entity_id' => 'attribute_id', 'attribute_set_id' => 'attribute_set_id'], 'eav_entity_attribute WHERE attribute_id = OLD.attribute_id'),
+        ]));
+
+        $this->createTrigger('catalog_eav_attribute', 'au', $this->onlyIfChanged(
+            $this->columnsExcept('catalog_eav_attribute', ['attribute_id']),
+            $this->log('attribute', ['entity_id' => 'NEW.attribute_id']),
+        ));
+
+        foreach (['ai' => 'NEW', 'au' => 'NEW', 'ad' => 'OLD'] as $event => $row) {
+            $label = $this->log('attribute', ['entity_id' => "{$row}.attribute_id", 'store_id' => "{$row}.store_id"]);
+            $option = $this->log('attribute', ['entity_id' => "{$row}.attribute_id"]);
+            $optionValue = $this->log('attribute', ['entity_id' => 'attribute_id', 'store_id' => "{$row}.store_id"], "eav_attribute_option WHERE option_id = {$row}.option_id");
+            $swatch = $optionValue;
+            $entityAttribute = $this->log('attribute', ['entity_id' => "{$row}.attribute_id", 'attribute_set_id' => "{$row}.attribute_set_id"]);
+
+            if ($event === 'au') {
+                $label = $this->onlyIfChanged(['value'], $label);
+                $option = $this->onlyIfChanged(['sort_order'], $option);
+                $optionValue = $this->onlyIfChanged(['value'], $optionValue);
+                $swatch = $this->onlyIfChanged(['type', 'value'], $swatch);
+                $entityAttribute = $this->onlyIfChanged($this->columnsExcept('eav_entity_attribute', ['entity_attribute_id']), $entityAttribute);
+            }
+
+            $this->createTrigger('eav_attribute_label', $event, $label);
+            $this->createTrigger('eav_attribute_option', $event, $option);
+            $this->createTrigger('eav_attribute_option_value', $event, $optionValue);
+            $this->createTrigger('eav_attribute_option_swatch', $event, $swatch);
+            $this->createTrigger('eav_entity_attribute', $event, $entityAttribute);
+        }
+    }
+
+    protected function createTrigger(string $table, string $event, string $body): void
+    {
+        $body = str_replace(':trigger', "'{$table}_{$event}'", $body);
+
         DB::unprepared("
-            CREATE TRIGGER rapidez_catalog_product_entity_int_category_fanin AFTER UPDATE ON catalog_product_entity_int
+            CREATE TRIGGER rapidez_changelog_{$table}_{$event} {$this->events[$event]} ON {$table}
             FOR EACH ROW
             BEGIN
-                IF NEW.attribute_id IN ({$statusAttributeId}, {$visibilityAttributeId}) THEN
-                    INSERT INTO rapidez_category_changelog (entity_id, store_id, `trigger`)
-                    SELECT category_id, NEW.store_id, 'catalog_product_entity_int_category_fanin'
-                    FROM catalog_category_product WHERE product_id = NEW.entity_id;
-                END IF;
+                {$body}
             END
         ");
     }
 
-    protected function createAttributeDefinitionTriggers(): void
+    protected function log(string $changelog, array $values, ?string $from = null): string
     {
-        DB::unprepared("
-            CREATE TRIGGER rapidez_eav_entity_attribute_ai AFTER INSERT ON eav_entity_attribute
-            FOR EACH ROW
-            INSERT INTO rapidez_product_changelog (entity_id, store_id, `trigger`)
-            SELECT entity_id, 0, 'eav_entity_attribute_ai'
-            FROM catalog_product_entity WHERE attribute_set_id = NEW.attribute_set_id
-        ");
+        $values['`trigger`'] = ':trigger';
+        $columns = implode(', ', array_keys($values));
+        $values = implode(', ', $values);
 
-        DB::unprepared("
-            CREATE TRIGGER rapidez_eav_entity_attribute_ad AFTER DELETE ON eav_entity_attribute
-            FOR EACH ROW
-            INSERT INTO rapidez_product_changelog (entity_id, store_id, `trigger`)
-            SELECT entity_id, 0, 'eav_entity_attribute_ad'
-            FROM catalog_product_entity WHERE attribute_set_id = OLD.attribute_set_id
-        ");
-
-        DB::unprepared("
-            CREATE TRIGGER rapidez_catalog_eav_attribute_au AFTER UPDATE ON catalog_eav_attribute
-            FOR EACH ROW
-            BEGIN
-                IF NEW.is_visible_on_front <> OLD.is_visible_on_front
-                    OR NEW.used_in_product_listing <> OLD.used_in_product_listing
-                    OR NEW.is_visible <> OLD.is_visible THEN
-                    INSERT INTO rapidez_product_changelog (entity_id, store_id, `trigger`)
-                    SELECT cpe.entity_id, 0, 'catalog_eav_attribute_au'
-                    FROM eav_entity_attribute eea
-                    JOIN catalog_product_entity cpe ON cpe.attribute_set_id = eea.attribute_set_id
-                    WHERE eea.attribute_id = NEW.attribute_id;
-                END IF;
-            END
-        ");
-
-        DB::unprepared("
-            CREATE TRIGGER rapidez_eav_attribute_label_ai AFTER INSERT ON eav_attribute_label
-            FOR EACH ROW
-            INSERT INTO rapidez_product_changelog (entity_id, store_id, `trigger`)
-            SELECT cpe.entity_id, NEW.store_id, 'eav_attribute_label_ai'
-            FROM eav_entity_attribute eea
-            JOIN catalog_product_entity cpe ON cpe.attribute_set_id = eea.attribute_set_id
-            WHERE eea.attribute_id = NEW.attribute_id
-        ");
-
-        DB::unprepared("
-            CREATE TRIGGER rapidez_eav_attribute_label_au AFTER UPDATE ON eav_attribute_label
-            FOR EACH ROW
-            INSERT INTO rapidez_product_changelog (entity_id, store_id, `trigger`)
-            SELECT cpe.entity_id, NEW.store_id, 'eav_attribute_label_au'
-            FROM eav_entity_attribute eea
-            JOIN catalog_product_entity cpe ON cpe.attribute_set_id = eea.attribute_set_id
-            WHERE eea.attribute_id = NEW.attribute_id
-        ");
+        return $from
+            ? "INSERT INTO rapidez_{$changelog}_changelog ({$columns}) SELECT {$values} FROM {$from};"
+            : "INSERT INTO rapidez_{$changelog}_changelog ({$columns}) VALUES ({$values});";
     }
 
-    protected function allTriggerNames(): array
+    protected function onlyIfChanged(array $columns, string $body): string
     {
-        $triggers = [
-            'catalog_product_entity_ai',
-            'catalog_product_entity_au',
-            'catalog_product_entity_ad',
-            'catalog_product_website_ai',
-            'catalog_product_website_ad',
-            'cataloginventory_stock_item_au',
-            'catalog_product_super_link_ai',
-            'catalog_product_super_link_ad',
-            'catalog_category_entity_ai',
-            'catalog_category_entity_au',
-            'catalog_category_entity_ad',
-            'catalog_category_product_ai',
-            'catalog_category_product_ad',
-            'catalog_product_entity_int_category_fanin',
-            'eav_entity_attribute_ai',
-            'eav_entity_attribute_ad',
-            'catalog_eav_attribute_au',
-            'eav_attribute_label_ai',
-            'eav_attribute_label_au',
-        ];
+        $condition = collect($columns)
+            ->map(fn (string $column) => "NOT (NEW.`{$column}` <=> OLD.`{$column}`)")
+            ->implode(' OR ');
 
-        foreach ($this->productEavTables as $table) {
-            $triggers[] = "{$table}_ai";
-            $triggers[] = "{$table}_au";
-        }
+        return "IF {$condition} THEN {$body} END IF;";
+    }
 
-        foreach ($this->categoryEavTables as $table) {
-            $triggers[] = "{$table}_ai";
-            $triggers[] = "{$table}_au";
-        }
+    protected function columnsExcept(string $table, array $except): array
+    {
+        return array_values(array_diff(Schema::getColumnListing($table), $except));
+    }
 
-        return $triggers;
+    protected function statusVisibilityAttributeIds(): ?string
+    {
+        $attributeIds = DB::table('eav_attribute')
+            ->join('eav_entity_type', 'eav_entity_type.entity_type_id', '=', 'eav_attribute.entity_type_id')
+            ->where('eav_entity_type.entity_type_code', 'catalog_product')
+            ->whereIn('eav_attribute.attribute_code', ['status', 'visibility'])
+            ->pluck('eav_attribute.attribute_id');
+
+        return $attributeIds->isEmpty() ? null : $attributeIds->implode(', ');
     }
 };
