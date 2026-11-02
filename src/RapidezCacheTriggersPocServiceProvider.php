@@ -13,16 +13,7 @@ class RapidezCacheTriggersPocServiceProvider extends ServiceProvider
 
     public function boot()
     {
-        $this
-            ->bootMigrations()
-            ->bootPublishables();
-    }
-
-    public function bootMigrations(): static
-    {
-        $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
-
-        return $this;
+        $this->bootPublishables();
     }
 
     public function bootPublishables(): static
