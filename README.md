@@ -21,12 +21,13 @@ php artisan vendor:publish --tag=rapidez-cache-triggers-poc-config
 
 ## Usage
 
-This package exposes an action which will tell you which products or categories have changed since a certain date.
+This package exposes an action which will tell you which products or categories have changed since a certain date. This can be in a given store, or across the board.
 
 For example:
 
 ```php
 $this->getUpdatedItemsAction
+    ->store(2)
     ->getSince(now()->subMinutes(5));
 ```
 
@@ -35,6 +36,7 @@ You can also filter by trigger, using either the `onlyOn()` or `exceptOn()` chai
 ```php
 $this->getUpdatedItemsAction
     ->onlyOn(['eav_attribute_label_ai','eav_attribute_label_au','eav_attribute_label_ad'])
+    ->store(2)
     ->getSince(now()->subMinutes(5));
 ```
 
