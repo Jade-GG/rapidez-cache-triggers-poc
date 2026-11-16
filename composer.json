@@ -50,6 +50,6 @@
         "larastan/larastan": "^3.9",
         "orchestra/testbench": "^10.11|^11.0",
         "phpunit/phpunit": "^12.5|^13.0",
-        "rapidez/coding-standards": "^1.0"
+        "rapidez/coding-standards": "^1.0.1"
     }
 }

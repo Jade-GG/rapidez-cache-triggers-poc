@@ -5,3 +5,5 @@ parameters:
     level: 1
     paths:
         - src/
+    ignoreErrors:
+        - '#^Result of static method TorMorten\\Eventy\\Events::#'
