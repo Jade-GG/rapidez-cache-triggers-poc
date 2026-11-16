@@ -3,8 +3,8 @@
 namespace Rapidez\RapidezCacheTriggersPoc\Models;
 
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Schema;
 use Rapidez\Core\Models\Model;
+use Rapidez\RapidezCacheTriggersPoc\Exceptions\SourceUnavailableException;
 use Rapidez\RapidezCacheTriggersPoc\Sources\Source;
 
 abstract class Changelog extends Model implements Source
@@ -20,10 +20,10 @@ abstract class Changelog extends Model implements Source
         return $this->view.'_cl';
     }
 
-    public function getState(mixed $previous): ?int
+    public function getState(mixed $previous): int
     {
-        if (! Schema::hasTable($this->getTable())) {
-            return null;
+        if ($this->getConnection()->table('mview_state')->where('view_id', $this->view)->value('mode') !== 'enabled') {
+            throw new SourceUnavailableException("The \"{$this->view}\" indexer isn't set to \"Update by Schedule\", its changes can't be detected.");
         }
 
         return (int) static::max('version_id');

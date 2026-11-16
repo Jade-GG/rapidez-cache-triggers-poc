@@ -4,8 +4,8 @@ namespace Rapidez\RapidezCacheTriggersPoc\Actions;
 
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
-use Rapidez\RapidezCacheTriggersPoc\Exceptions\SourceUnavailableException;
 use Rapidez\RapidezCacheTriggersPoc\Sources\Source;
+use Throwable;
 use TorMorten\Eventy\Facades\Eventy;
 
 class GetUpdatedItemsAction
@@ -17,19 +17,26 @@ class GetUpdatedItemsAction
      */
     public function handle(string $tag = 'default', ?int $threshold = null): array
     {
+        try {
+            return $this->getChanges($tag, $threshold);
+        } catch (Throwable $exception) {
+            report($exception);
+
+            return ['everything' => true];
+        }
+    }
+
+    /**
+     * @return array{everything: bool}&array<string, Collection<int, int>|bool>
+     */
+    protected function getChanges(string $tag, ?int $threshold): array
+    {
         $previous = json_decode(Storage::disk('local')->get(static::STATE_PATH . $tag) ?? '', true)['sources'] ?? null;
         $sources = collect(config('rapidez.cache-triggers-poc.sources'))->map(fn (string $class) => app($class));
         $state = $sources->map(fn (Source $source, string $key) => $source->getState($previous[$key] ?? null))->toArray();
         Storage::disk('local')->put(static::STATE_PATH . $tag, json_encode(['sources' => $state]));
 
         if (! $previous) {
-            return ['everything' => true];
-        }
-
-        $unavailable = $sources->keys()->filter(fn (string $key) => isset($previous[$key]) && ! isset($state[$key]));
-        if ($unavailable->isNotEmpty()) {
-            $unavailable->each(fn (string $key) => report(SourceUnavailableException::forSource($key)));
-
             return ['everything' => true];
         }
 
