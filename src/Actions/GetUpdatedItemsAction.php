@@ -13,21 +13,24 @@ use Rapidez\RapidezCacheTriggersPoc\Models\Changelogs\ProductCategoryChangelog;
 
 class GetUpdatedItemsAction
 {
-    public const STATE_PATH = '/.rapidez-cache-state';
+    public const STATE_PATH = '/.rapidez-changelog-';
 
     /**
      * @return array{products: Collection<int, int>, categories: Collection<int, int>, flush: bool}
      */
-    public function execute(): array
+    public function handle(string $tag = 'default'): array
     {
-        $previous = json_decode(Storage::disk('local')->get(static::STATE_PATH) ?? '', true);
+        $previous = json_decode(Storage::disk('local')->get(static::STATE_PATH . $tag) ?? '', true);
+        $optionsChecksum = $this->getChecksum(['eav_attribute_option', 'eav_attribute_option_value', 'eav_attribute_option_swatch']);
+        $attributesChecksum = $this->getChecksum(['eav_attribute', 'catalog_eav_attribute', 'eav_attribute_label', 'eav_entity_attribute']);
         $state = [
             'time' => DB::scalar('SELECT NOW()'),
             'versions' => $this->getVersions(),
-            'attributes' => $this->getChecksum(['eav_attribute', 'catalog_eav_attribute', 'eav_attribute_label', 'eav_entity_attribute']),
-            'options' => AttributeOption::getHashes(),
+            'attributes' => $attributesChecksum,
+            'options_checksum' => $optionsChecksum,
+            'options' => $optionsChecksum === ($previous['options_checksum'] ?? null) ? $previous['options'] : AttributeOption::getHashes(),
         ];
-        Storage::disk('local')->put(static::STATE_PATH, json_encode($state));
+        Storage::disk('local')->put(static::STATE_PATH . $tag, json_encode($state));
 
         $products = collect();
         $categories = collect();

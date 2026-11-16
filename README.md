@@ -16,18 +16,19 @@ Products and categories with a changed `updated_at` are always returned. Magento
 
 Magento fills these changelogs with database triggers on the tables each indexer subscribes to (see the `mview.xml` files), so they contain the ids of every product or category with a changed row in those tables, also for direct database writes like the Akeneo connector's. We don't use the indexers themselves, only their changelogs.
 
-| Indexer | Title in the admin | Used for |
-|---|---|---|
-| `catalog_product_attribute` | Product EAV | `int`, `decimal` and `varchar` attribute values, product links |
-| `catalog_product_price` | Product Price | Prices, tier prices, catalog rule prices, `datetime` attribute values, websites |
-| `cataloginventory_stock` | Stock | Stock items |
-| `catalog_product_category` | Product Categories | Category assignments, status/visibility and websites (product and its categories) |
+| Indexer                     | Title in the admin | Used for                                                                          |
+| --------------------------- | ------------------ | --------------------------------------------------------------------------------- |
+| `catalog_product_attribute` | Product EAV        | `int`, `decimal` and `varchar` attribute values, product links                    |
+| `catalog_product_price`     | Product Price      | Prices, tier prices, catalog rule prices, `datetime` attribute values, websites   |
+| `cataloginventory_stock`    | Stock              | Stock items                                                                       |
+| `catalog_product_category`  | Product Categories | Category assignments, status/visibility and websites (product and its categories) |
 
 ```
 bin/magento indexer:set-mode schedule catalog_product_attribute catalog_product_price cataloginventory_stock catalog_product_category
 ```
 
 Impact of "Update by Schedule" on Magento:
+
 - Saving a product or category no longer reindexes immediately, the Magento cron (`indexer_update_all_views`, every minute by default) does it instead. Admin saves and imports get faster, but index tables (e.g. the price index with special and catalog rule prices) are updated a little later. The Magento cron must be running.
 - Magento adds database triggers to the catalog tables to fill the changelogs. This is Magento's own, recommended mechanism, and is what makes changes from direct database writes (like the Akeneo connector) get picked up.
 - The changelogs are cleaned up by Magento (`indexer_clean_all_changelogs`, hourly by default).
@@ -35,6 +36,7 @@ Impact of "Update by Schedule" on Magento:
 ## Configuration
 
 You can publish the config with:
+
 ```
 php artisan vendor:publish --tag=rapidez-cache-triggers-poc-config
 ```
@@ -56,13 +58,14 @@ $changes['products'];   // Collection of product ids, including parents of chang
 $changes['categories']; // Collection of category ids
 ```
 
-The position in each changelog is stored in `.rapidez-cache-state` on the `local` storage disk, so it survives cache clears and deployments (as long as the storage directory is shared between releases). The first call (when there is no cursor yet) only creates a baseline and returns no changes.
+The position in each changelog is stored in `.rapidez-changelog-{your tag here}` on the `local` storage disk, so it survives cache clears and deployments (as long as the storage directory is shared between releases). The first call (when there is no cursor yet) only creates a baseline and returns no changes.
 
 Changes are returned as soon as they're in the changelog, without waiting for Magento's indexer to process them.
 
 When an attribute option label or swatch changes, the products that use that option (and their parents) are returned as well.
 
 `flush` is set when:
+
 - An attribute definition, attribute label or attribute set changed (these affect almost every page).
 - Changelog entries were reindexed and cleaned up by Magento (`indexer_clean_all_changelogs`, hourly) before they were read, or when a changelog was reset.
 
