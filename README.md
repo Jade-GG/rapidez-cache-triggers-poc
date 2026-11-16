@@ -43,41 +43,42 @@ php artisan vendor:publish --tag=rapidez-cache-triggers-poc-config
 
 `changelogs` contains the changelog models that are read. Each model extends `Rapidez\RapidezCacheTriggersPoc\Models\Changelog` and only defines its Magento view. The ids in these changelogs are product ids. For `ProductCategoryChangelog` the categories of the changed products are returned as well.
 
+`threshold` is the default maximum number of changed products (before parents are added). Above this number, `everything` is set. Keep this below the purge limits of your CDN (e.g. Cloudflare). You can give each consumer its own threshold with the `threshold` argument of `handle()`.
+
 ## Usage
 
 This package exposes an action which will tell you which products and categories have changed since the last time you called it:
 
 ```php
-$changes = $this->getUpdatedItemsAction->execute();
+$changes = $this->getUpdatedItemsAction->handle('cloudflare', threshold: 200);
 
-if ($changes['flush']) {
-    // Changes were missed, clear everything
+if ($changes['everything']) {
+    // Clear everything, products and categories are empty
 }
 
 $changes['products'];   // Collection of product ids, including parents of changed children
 $changes['categories']; // Collection of category ids
 ```
 
-The position in each changelog is stored in `.rapidez-changelog-{your tag here}` on the `local` storage disk, so it survives cache clears and deployments (as long as the storage directory is shared between releases). The first call (when there is no cursor yet) only creates a baseline and returns no changes.
+The position in each changelog is stored in `.rapidez-changelog-{your tag here}` on the `local` storage disk, so it survives cache clears and deployments (as long as the storage directory is shared between releases). The first call (when there is no state yet) creates a baseline and returns `everything`.
 
 Changes are returned as soon as they're in the changelog, without waiting for Magento's indexer to process them.
 
 When an attribute option label or swatch changes, the products that use that option (and their parents) are returned as well.
 
-`flush` is set when:
+`everything` is set when (`products` and `categories` are then empty):
 
 - An attribute definition, attribute label or attribute set changed (these affect almost every page).
 - Changelog entries were reindexed and cleaned up by Magento (`indexer_clean_all_changelogs`, hourly) before they were read, or when a changelog was reset.
+- An attribute option was deleted.
+- More products changed than the threshold.
+- There is no state yet for this tag.
 
 ## Todo
 
 This is a proof of concept; these are known things to address before using it in production:
 
-- Only rebuild the attribute option hashes when the option tables changed (e.g. using `CHECKSUM TABLE`). Building them takes ~1.4s and ~80MB for 20.000 options on every call.
-- Chunk the `whereIn` queries for parents and categories, very large changesets (e.g. a full Akeneo import) can exceed MySQL's placeholder limit.
 - The state is saved before the changes are processed, if processing fails those changes are lost. Return the new state and only save it after processing succeeded.
-- A missing state file starts a new baseline, it should probably trigger a flush when there was a state before (e.g. after a lost storage directory).
-- Products that used a deleted attribute option are not returned.
 - Attribute changes of any entity type (e.g. customer attributes) trigger a flush, this could be limited to product attributes.
 - Changes aren't store specific.
 - Categories that a product was removed from are not returned.

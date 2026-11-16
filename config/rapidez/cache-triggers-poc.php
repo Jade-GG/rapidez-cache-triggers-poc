@@ -7,4 +7,6 @@ return [
         Rapidez\RapidezCacheTriggersPoc\Models\Changelogs\StockChangelog::class,
         Rapidez\RapidezCacheTriggersPoc\Models\Changelogs\ProductCategoryChangelog::class,
     ],
+
+    'threshold' => 200,
 ];

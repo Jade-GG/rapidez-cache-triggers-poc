@@ -16,9 +16,9 @@ class GetUpdatedItemsAction
     public const STATE_PATH = '/.rapidez-changelog-';
 
     /**
-     * @return array{products: Collection<int, int>, categories: Collection<int, int>, flush: bool}
+     * @return array{products: Collection<int, int>, categories: Collection<int, int>, everything: bool}
      */
-    public function handle(string $tag = 'default'): array
+    public function handle(string $tag = 'default', ?int $threshold = null): array
     {
         $previous = json_decode(Storage::disk('local')->get(static::STATE_PATH . $tag) ?? '', true);
         $optionsChecksum = $this->getChecksum(['eav_attribute_option', 'eav_attribute_option_value', 'eav_attribute_option_swatch']);
@@ -32,17 +32,25 @@ class GetUpdatedItemsAction
         ];
         Storage::disk('local')->put(static::STATE_PATH . $tag, json_encode($state));
 
-        $products = collect();
-        $categories = collect();
-        $flush = false;
+        $everything = [
+            'products' => collect(),
+            'categories' => collect(),
+            'everything' => true,
+        ];
 
         if (! $previous) {
-            return [
-                'products' => $products,
-                'categories' => $categories,
-                'flush' => $flush,
-            ];
+            return $everything;
         }
+
+        $attributesChanged = $state['attributes'] !== $previous['attributes'];
+        $optionsDeleted = count(array_diff_key($previous['options'], $state['options'])) > 0;
+
+        if ($attributesChanged || $optionsDeleted) {
+            return $everything;
+        }
+
+        $products = collect();
+        $categories = collect();
 
         foreach (config('rapidez.cache-triggers-poc.changelogs') as $class) {
             $from = $previous['versions'][$class] ?? null;
@@ -56,9 +64,7 @@ class GetUpdatedItemsAction
             $changelog = new $class;
 
             if ($changelog->hasMissedChanges($from, $to)) {
-                $flush = true;
-
-                continue;
+                return $everything;
             }
 
             $ids = $changelog->getChangedIds($from, $to);
@@ -71,7 +77,13 @@ class GetUpdatedItemsAction
 
         $products = $products
             ->merge(config('rapidez.models.product')::withoutGlobalScopes()->where('updated_at', '>=', $previous['time'])->pluck('entity_id'))
-            ->merge(AttributeOption::getProducts(array_keys(array_diff_assoc($state['options'], $previous['options']))));
+            ->merge(AttributeOption::getProducts(array_keys(array_diff_assoc($state['options'], $previous['options']))))
+            ->unique();
+
+        if ($products->count() > ($threshold ?? config('rapidez.cache-triggers-poc.threshold'))) {
+            return $everything;
+        }
+
         $products = $products->merge($this->getParents($products));
 
         $categories = $categories
@@ -80,7 +92,7 @@ class GetUpdatedItemsAction
         return [
             'products' => $products->unique()->values(),
             'categories' => $categories->unique()->values(),
-            'flush' => $flush || $state['attributes'] !== $previous['attributes'],
+            'everything' => false,
         ];
     }
 
