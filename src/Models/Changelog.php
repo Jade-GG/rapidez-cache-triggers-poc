@@ -38,7 +38,7 @@ abstract class Changelog extends Model
             return false;
         }
 
-        return static::where('version_id', '>', $from)->min('version_id') > $from + 1;
+        return $from > 0 && static::where('version_id', $from)->doesntExist();
     }
 
     /**
