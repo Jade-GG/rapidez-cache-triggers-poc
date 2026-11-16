@@ -2,139 +2,59 @@
 
 namespace Rapidez\RapidezCacheTriggersPoc\Actions;
 
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use Rapidez\RapidezCacheTriggersPoc\Models\AttributeOption;
-use Rapidez\RapidezCacheTriggersPoc\Models\CategoryProductLink;
-use Rapidez\RapidezCacheTriggersPoc\Models\Changelog;
-use Rapidez\RapidezCacheTriggersPoc\Models\Changelogs\ProductCategoryChangelog;
+use Rapidez\RapidezCacheTriggersPoc\Exceptions\SourceUnavailableException;
+use Rapidez\RapidezCacheTriggersPoc\Sources\Source;
+use TorMorten\Eventy\Facades\Eventy;
 
 class GetUpdatedItemsAction
 {
     public const STATE_PATH = '/.rapidez-changelog-';
 
     /**
-     * @return array{products: Collection<int, int>, categories: Collection<int, int>, everything: bool}
+     * @return array{everything: bool}&array<string, Collection<int, int>|bool>
      */
     public function handle(string $tag = 'default', ?int $threshold = null): array
     {
-        $previous = json_decode(Storage::disk('local')->get(static::STATE_PATH . $tag) ?? '', true);
-        $optionsChecksum = $this->getChecksum(['eav_attribute_option', 'eav_attribute_option_value', 'eav_attribute_option_swatch']);
-        $attributesChecksum = $this->getChecksum(['eav_attribute', 'catalog_eav_attribute', 'eav_attribute_label', 'eav_entity_attribute']);
-        $state = [
-            'time' => DB::scalar('SELECT NOW()'),
-            'versions' => $this->getVersions(),
-            'attributes' => $attributesChecksum,
-            'options_checksum' => $optionsChecksum,
-            'options' => $optionsChecksum === ($previous['options_checksum'] ?? null) ? $previous['options'] : AttributeOption::getHashes(),
-        ];
-        Storage::disk('local')->put(static::STATE_PATH . $tag, json_encode($state));
-
-        $everything = [
-            'products' => collect(),
-            'categories' => collect(),
-            'everything' => true,
-        ];
+        $previous = json_decode(Storage::disk('local')->get(static::STATE_PATH . $tag) ?? '', true)['sources'] ?? null;
+        $sources = collect(config('rapidez.cache-triggers-poc.sources'))->map(fn (string $class) => app($class));
+        $state = $sources->map(fn (Source $source, string $key) => $source->getState($previous[$key] ?? null))->toArray();
+        Storage::disk('local')->put(static::STATE_PATH . $tag, json_encode(['sources' => $state]));
 
         if (! $previous) {
-            return $everything;
+            return ['everything' => true];
         }
 
-        $attributesChanged = $state['attributes'] !== $previous['attributes'];
-        $optionsDeleted = count(array_diff_key($previous['options'], $state['options'])) > 0;
+        $unavailable = $sources->keys()->filter(fn (string $key) => isset($previous[$key]) && ! isset($state[$key]));
+        if ($unavailable->isNotEmpty()) {
+            $unavailable->each(fn (string $key) => report(SourceUnavailableException::forSource($key)));
 
-        if ($attributesChanged || $optionsDeleted) {
-            return $everything;
+            return ['everything' => true];
         }
 
-        $products = collect();
-        $categories = collect();
-
-        foreach (config('rapidez.cache-triggers-poc.changelogs') as $class) {
-            $from = $previous['versions'][$class] ?? null;
-            $to = $state['versions'][$class] ?? null;
-
-            if ($from === null || $to === null) {
-                continue;
-            }
-
-            /** @var Changelog $changelog */
-            $changelog = new $class;
-
-            if ($changelog->hasMissedChanges($from, $to)) {
-                return $everything;
-            }
-
-            $ids = $changelog->getChangedIds($from, $to);
-            $products = $products->merge($ids);
-
-            if ($changelog instanceof ProductCategoryChangelog) {
-                $categories = $categories->merge($this->getCategories($ids));
-            }
+        $sources = $sources->filter(fn (Source $source, string $key) => isset($previous[$key], $state[$key]));
+        if ($sources->contains(fn (Source $source, string $key) => $source->hasMissedChanges($previous[$key], $state[$key]))) {
+            return ['everything' => true];
         }
 
-        $products = $products
-            ->merge(config('rapidez.models.product')::withoutGlobalScopes()->where('updated_at', '>=', $previous['time'])->pluck('entity_id'))
-            ->merge(AttributeOption::getProducts(array_keys(array_diff_assoc($state['options'], $previous['options']))))
-            ->unique();
+        $changes = $sources
+            ->map(fn (Source $source, string $key) => $source->getChanged($previous[$key], $state[$key]))
+            ->reduce(function (Collection $accumulator, Collection $sourceChanges) {
+                return $sourceChanges
+                    ->map(fn (Collection $ids, string $type) => $accumulator->get($type, collect())->merge($ids))
+                    ->union($accumulator);
+            }, collect())
+            ->map(fn (Collection $ids) => $ids->unique()->values());
 
-        if ($products->count() > ($threshold ?? config('rapidez.cache-triggers-poc.threshold'))) {
-            return $everything;
+        if ($changes->sum->count() > ($threshold ?? config('rapidez.cache-triggers-poc.threshold'))) {
+            return ['everything' => true];
         }
 
-        $products = $products->merge($this->getParents($products));
+        foreach ($changes as $type => $ids) {
+            $changes[$type] = Eventy::filter('cache-triggers-poc.changes.' . $type, $ids)->unique()->values();
+        }
 
-        $categories = $categories
-            ->merge(config('rapidez.models.category')::withoutGlobalScopes()->where('updated_at', '>=', $previous['time'])->pluck('entity_id'));
-
-        return [
-            'products' => $products->unique()->values(),
-            'categories' => $categories->unique()->values(),
-            'everything' => false,
-        ];
-    }
-
-    /**
-     * @return array<string, int>
-     */
-    protected function getVersions(): array
-    {
-        return collect(config('rapidez.cache-triggers-poc.changelogs'))
-            ->mapWithKeys(fn (string $class) => [$class => (new $class)->getVersion()])
-            ->filter(fn (?int $version) => $version !== null)
-            ->all();
-    }
-
-    protected function getChecksum(array $tables): string
-    {
-        return collect(DB::select('CHECKSUM TABLE '.implode(', ', $tables)))->pluck('Checksum')->implode(',');
-    }
-
-    /**
-     * @param Collection<int, int> $products
-     * @return Collection<int, int>
-     */
-    protected function getParents(Collection $products): Collection
-    {
-        return config('rapidez.models.product')::withoutGlobalScopes()
-            ->whereHas('children', fn (Builder $query) => $query->withoutGlobalScopes()->whereIn('child_id', $products))
-            ->pluck('entity_id');
-    }
-
-    /**
-     * @param Collection<int, int> $products
-     * @return Collection<int, int>
-     */
-    protected function getCategories(Collection $products): Collection
-    {
-        $categories = CategoryProductLink::whereIn('product_id', $products)->distinct()->pluck('category_id');
-
-        return config('rapidez.models.category')::withoutGlobalScopes()
-            ->whereIn('entity_id', $categories)
-            ->pluck('path')
-            ->flatMap(fn (string $path) => array_slice(explode('/', $path), 2))
-            ->map(fn (string $id) => (int) $id);
+        return ['everything' => false, ...$changes];
     }
 }
