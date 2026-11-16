@@ -129,6 +129,12 @@ class GetUpdatedItemsAction
      */
     protected function getCategories(Collection $products): Collection
     {
-        return CategoryProductLink::whereIn('product_id', $products)->pluck('category_id');
+        $categories = CategoryProductLink::whereIn('product_id', $products)->distinct()->pluck('category_id');
+
+        return config('rapidez.models.category')::withoutGlobalScopes()
+            ->whereIn('entity_id', $categories)
+            ->pluck('path')
+            ->flatMap(fn (string $path) => array_slice(explode('/', $path), 2))
+            ->map(fn (string $id) => (int) $id);
     }
 }
