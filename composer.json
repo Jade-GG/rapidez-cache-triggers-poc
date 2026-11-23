@@ -25,6 +25,14 @@
             "Rapidez\\RapidezCacheTriggersPoc\\": "src"
         }
     },
+    "autoload-dev": {
+        "psr-4": {
+            "Rapidez\\RapidezCacheTriggersPoc\\Tests\\": "tests"
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
     "config": {
         "sort-packages": true,
         "allow-plugins": {
@@ -40,6 +48,8 @@
     },
     "require-dev": {
         "larastan/larastan": "^3.9",
-        "rapidez/coding-standards": "^1.0"
+        "orchestra/testbench": "^10.11|^11.0",
+        "phpunit/phpunit": "^12.5|^13.0",
+        "rapidez/coding-standards": "^1.0.1"
     }
 }

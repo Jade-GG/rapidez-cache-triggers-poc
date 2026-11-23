@@ -3,6 +3,9 @@
 namespace Rapidez\RapidezCacheTriggersPoc;
 
 use Illuminate\Support\ServiceProvider;
+use Rapidez\RapidezCacheTriggersPoc\Transforms\AddCategoryParents;
+use Rapidez\RapidezCacheTriggersPoc\Transforms\AddProductParents;
+use TorMorten\Eventy\Facades\Eventy;
 
 class RapidezCacheTriggersPocServiceProvider extends ServiceProvider
 {
@@ -13,16 +16,10 @@ class RapidezCacheTriggersPocServiceProvider extends ServiceProvider
 
     public function boot()
     {
-        $this
-            ->bootMigrations()
-            ->bootPublishables();
-    }
+        $this->bootPublishables();
 
-    public function bootMigrations(): static
-    {
-        $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
-
-        return $this;
+        Eventy::addFilter('cache-triggers-poc.changes.products', AddProductParents::class);
+        Eventy::addFilter('cache-triggers-poc.changes.categories', AddCategoryParents::class);
     }
 
     public function bootPublishables(): static

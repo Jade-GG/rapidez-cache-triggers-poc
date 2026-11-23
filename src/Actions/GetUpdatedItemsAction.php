@@ -2,79 +2,66 @@
 
 namespace Rapidez\RapidezCacheTriggersPoc\Actions;
 
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
-use Rapidez\RapidezCacheTriggersPoc\Models\AttributeChangelog;
-use Rapidez\RapidezCacheTriggersPoc\Models\CategoryChangelog;
-use Rapidez\RapidezCacheTriggersPoc\Models\ProductChangelog;
+use Illuminate\Support\Facades\Storage;
+use Rapidez\RapidezCacheTriggersPoc\Sources\Source;
+use Throwable;
+use TorMorten\Eventy\Facades\Eventy;
 
 class GetUpdatedItemsAction
 {
-    protected array $triggers = [];
-    protected array $exceptTriggers = [];
-    protected ?int $storeId = null;
+    public const STATE_PATH = '/.rapidez-changelog-';
 
     /**
-     *  @param array<string> $triggers
+     * @return array{everything: bool}&array<string, Collection<int, int>|bool>
      */
-    public function onlyOn(array $triggers): static
+    public function handle(string $tag = 'default', ?int $threshold = null): array
     {
-        $clone = clone $this;
-        $clone->triggers = $triggers;
+        try {
+            return $this->getChanges($tag, $threshold);
+        } catch (Throwable $exception) {
+            report($exception);
 
-        return $clone;
+            return ['everything' => true];
+        }
     }
 
     /**
-     *  @param array<string> $triggers
+     * @return array{everything: bool}&array<string, Collection<int, int>|bool>
      */
-    public function exceptOn(array $triggers): static
+    protected function getChanges(string $tag, ?int $threshold): array
     {
-        $clone = clone $this;
-        $clone->exceptTriggers = $triggers;
+        $previous = json_decode(Storage::disk('local')->get(static::STATE_PATH . $tag) ?? '', true)['sources'] ?? null;
+        $sources = collect(config('rapidez.cache-triggers-poc.sources'))->map(fn (string $class) => app($class));
+        $state = $sources->map(fn (Source $source, string $key) => $source->getState($previous[$key] ?? null))->toArray();
+        Storage::disk('local')->put(static::STATE_PATH . $tag, json_encode(['sources' => $state]));
 
-        return $clone;
-    }
+        if (! $previous) {
+            return ['everything' => true];
+        }
 
-    public function store(int $storeId): static
-    {
-        $clone = clone $this;
-        $clone->storeId = $storeId;
+        $sources = $sources->filter(fn (Source $source, string $key) => isset($previous[$key], $state[$key]));
+        if ($sources->contains(fn (Source $source, string $key) => $source->hasMissedChanges($previous[$key], $state[$key]))) {
+            return ['everything' => true];
+        }
 
-        return $clone;
-    }
+        $changes = $sources
+            ->map(fn (Source $source, string $key) => $source->getChanged($previous[$key], $state[$key]))
+            ->reduce(function (Collection $accumulator, Collection $sourceChanges) {
+                return $sourceChanges
+                    ->map(fn (Collection $ids, string $type) => $accumulator->get($type, collect())->merge($ids))
+                    ->union($accumulator);
+            }, collect())
+            ->map(fn (Collection $ids) => $ids->unique()->values());
 
-    /**
-     *  @return array<string,Collection<int, int>>
-     */
-    public function getSince(Carbon $since): array
-    {
-        return [
-            'products' => $this->getModelSince(ProductChangelog::class, $since),
-            'categories' => $this->getModelSince(CategoryChangelog::class, $since),
-            'attributes' => $this->getModelSince(AttributeChangelog::class, $since),
-        ];
-    }
+        if ($changes->sum->count() > ($threshold ?? config('rapidez.cache-triggers-poc.threshold'))) {
+            return ['everything' => true];
+        }
 
-    /**
-     *  @return Collection<int, int>
-     */
-    protected function getModelSince(string $model, Carbon $since): Collection
-    {
-        return $model::query()
-            ->where('created_at', '>', $since)
-            ->when(
-                count($this->triggers),
-                fn (Builder $query) => $query->whereIn('trigger', $this->triggers),
-                fn (Builder $query) => $query->whereNotIn('trigger', $this->exceptTriggers),
-            )
-            ->when(
-                ! is_null($this->storeId),
-                fn (Builder $query) => $query->whereIn('store_id', [0, $this->storeId]),
-            )
-            ->pluck('entity_id')
-            ->unique()
-            ->values();
+        foreach ($changes as $type => $ids) {
+            $changes[$type] = Eventy::filter('cache-triggers-poc.changes.' . $type, $ids)->unique()->values();
+        }
+
+        return ['everything' => false, ...$changes];
     }
 }
