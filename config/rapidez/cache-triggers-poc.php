@@ -10,6 +10,7 @@ return [
         'catalog_product_price' => Rapidez\RapidezCacheTriggersPoc\Models\Changelogs\ProductPriceChangelog::class,
         'cataloginventory_stock' => Rapidez\RapidezCacheTriggersPoc\Models\Changelogs\StockChangelog::class,
         'catalog_product_category' => Rapidez\RapidezCacheTriggersPoc\Models\Changelogs\ProductCategoryChangelog::class,
+        'catalogsearch_fulltext' => Rapidez\RapidezCacheTriggersPoc\Models\Changelogs\CatalogsearchFulltextChangelog::class,
     ],
 
     'threshold' => 200,
